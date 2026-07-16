@@ -1,9 +1,10 @@
-# Usage: pip install -r requirements.txt
+# --- Web UI Framework ---
+streamlit>=1.36.0
 
 # Base ----------------------------------------
 matplotlib>=3.2.2
 numpy>=1.18.5,<1.24.0
-opencv-python>=4.1.1
+opencv-python-headless>=4.1.1
 Pillow>=7.1.2
 PyYAML>=5.3.1
 requests>=2.23.0
