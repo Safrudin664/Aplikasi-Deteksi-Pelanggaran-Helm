@@ -37,8 +37,15 @@ if not os.path.exists(folder_simpan):
     os.makedirs(folder_simpan)
 
 # Pengaturan Server STUN/TURN Publik Google (Agar streaming jalan mulus di internet)
+# Pengaturan Multi-STUN Server (Mencegah koneksi terputus di Cloud)
 RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    {"iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+        {"urls": ["stun:stun2.l.google.com:19302"]},
+        {"urls": ["stun:stun3.l.google.com:19302"]},
+        {"urls": ["stun:stun4.l.google.com:19302"]},
+    ]}
 )
 
 # ----------------------------------------------------------------------
