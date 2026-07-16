@@ -10,6 +10,7 @@ import time
 import tempfile
 import glob
 import av
+from twilio.rest import Client  # <--- TAMBAHAN BARU
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode, RTCConfiguration
 
 from models.experimental import attempt_load
@@ -136,6 +137,25 @@ class YoloVideoProcessor(VideoProcessorBase):
         img = frame.to_ndarray(format="bgr24")
         img_hasil, self.waktu_jepret, _ = proses_deteksi_frame(img, self.waktu_jepret)
         return av.VideoFrame.from_ndarray(img_hasil, format="bgr24")
+
+
+
+TWILIO_ACCOUNT_SID = AC0d854a7b87db93f735d506b9e7f7a900
+TWILIO_AUTH_TOKEN = aa8a2f0a7dba5264bf0530b2c284f1ab
+
+@st.cache_data
+def get_ice_servers():
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        token = client.tokens.create()
+        return token.ice_servers
+    except Exception as e:
+        st.warning("Gagal terhubung ke Twilio. Menggunakan jalur cadangan.")
+        return [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": get_ice_servers()}
+)
 
 
 # ======================================================================
