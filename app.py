@@ -140,8 +140,8 @@ class YoloVideoProcessor(VideoProcessorBase):
 
 
 
-TWILIO_ACCOUNT_SID = AC0d854a7b87db93f735d506b9e7f7a900
-TWILIO_AUTH_TOKEN = aa8a2f0a7dba5264bf0530b2c284f1ab
+TWILIO_ACCOUNT_SID = "AC0d854a7b87db93f735d506b9e7f7a900"
+TWILIO_AUTH_TOKEN = "aa8a2f0a7dba5264bf0530b2c284f1ab"
 
 @st.cache_data
 def get_ice_servers():
