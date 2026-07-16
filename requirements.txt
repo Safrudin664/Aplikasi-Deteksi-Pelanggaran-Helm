@@ -2,12 +2,14 @@
 
 # --- Web UI Framework ---
 streamlit>=1.36.0
+streamlit-webrtc>=0.47.0
 
 # --- Core AI & Vision (CPU Only) ---
 torch>=1.7.0
 torchvision>=0.8.1
 numpy>=1.18.5
 opencv-python-headless>=4.1.1
+av>=10.0.0
 
 # --- YOLOv7 Dependencies ---
 matplotlib>=3.2.2
