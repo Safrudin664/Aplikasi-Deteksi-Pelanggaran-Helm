@@ -9,25 +9,41 @@ import numpy as np
 import time
 import tempfile
 import glob
-from camera_input_live import camera_input_live
+import av
+from twilio.rest import Client
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode, RTCConfiguration
 
 from models.experimental import attempt_load
 from utils.general import non_max_suppression, scale_coords
 from utils.datasets import letterbox
 
 # ----------------------------------------------------------------------
-# 1. KONFIGURASI HALAMAN & HIDE SIDEBAR
+# 1. KONFIGURASI HALAMAN & UI CSS CUSTOM
 # ----------------------------------------------------------------------
 st.set_page_config(
     page_title="Sistem Deteksi Pelanggaran Helm", 
     page_icon="🛵", 
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
+# Custom CSS untuk membuat tampilan persis seperti gambar desain Anda
 st.markdown("""
     <style>
-    [data-testid="collapsedControl"] {display: none;}
+    .card-realtime {
+        background-color: #1E293B;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 5px solid #3B82F6;
+        color: white;
+    }
+    .card-log {
+        background-color: #3F4222;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 5px solid #A3E635;
+        color: white;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -36,15 +52,28 @@ if not os.path.exists(folder_simpan):
     os.makedirs(folder_simpan)
 
 # ----------------------------------------------------------------------
-# 2. INISIALISASI SESSION STATE
+# 2. INISIALISASI SESSION STATE & TWILIO TURN SERVER
 # ----------------------------------------------------------------------
-if 'halaman_aktif' not in st.session_state:
-    st.session_state.halaman_aktif = 'Home'
 if 'waktu_jepret' not in st.session_state:
     st.session_state.waktu_jepret = 0
 
-def pindah_halaman(nama_halaman):
-    st.session_state.halaman_aktif = nama_halaman
+# --- KONFIGURASI TWILIO ---
+# PERHATIAN: Pastikan Token dicopy SETELAH mengklik tombol "Show" di dashboard Twilio
+TWILIO_ACCOUNT_SID = "AC0d854a7b87db93f735d506b9e7f7a900" 
+TWILIO_AUTH_TOKEN = "aa8a2f0a7dba5264bf0530b2c284f1ab" # Ganti dengan Token Asli yang sudah di-Show!
+
+def get_ice_servers():
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        token = client.tokens.create()
+        return token.ice_servers
+    except Exception as e:
+        st.sidebar.error(f"❌ Twilio Error: {e}")
+        return [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": get_ice_servers()}
+)
 
 # ----------------------------------------------------------------------
 # 3. PEMUATAN MODEL YOLOV7
@@ -65,9 +94,10 @@ except Exception as e:
     st.stop()
 
 # ----------------------------------------------------------------------
-# 4. FUNGSI LOGIKA INTI DETEKSI
+# 4. FUNGSI LOGIKA INTI DETEKSI (DIPERCEPAT UNTUK ANTI-LAG)
 # ----------------------------------------------------------------------
 def proses_deteksi_frame(img0, last_capture_time):
+    # Menggunakan resolusi 320 agar lebih ringan di CPU Cloud
     img = letterbox(img0, 320, stride=stride)[0]
     img = img[:, :, ::-1].transpose(2, 0, 1)  
     img = np.ascontiguousarray(img)
@@ -113,94 +143,91 @@ def proses_deteksi_frame(img0, last_capture_time):
                 
     return img0, last_capture_time, jumlah_no_helm
 
+# --- KELAS PROSESOR WEBRTC (DENGAN ASYNC FRAME DROPPER) ---
+class YoloVideoProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.waktu_jepret = 0
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        img = frame.to_ndarray(format="bgr24")
+        # Proses AI langsung di backend
+        img_hasil, self.waktu_jepret, _ = proses_deteksi_frame(img, self.waktu_jepret)
+        return av.VideoFrame.from_ndarray(img_hasil, format="bgr24")
+
 
 # ======================================================================
-# PENGATURAN ROUTING HALAMAN (TAMPILAN UI)
+# PENGATURAN ROUTING HALAMAN & SIDEBAR
 # ======================================================================
+
+st.sidebar.markdown("### 🛵 Pusat Navigasi")
+menu_utama = st.sidebar.radio(
+    "Pilih Menu Halaman:", 
+    ["🏠 Home", "📸 Deteksi Real-Time", "📂 Upload Video", "📊 Bukti Pelanggaran", "ℹ️ Tentang"]
+)
+st.sidebar.markdown("---")
+st.sidebar.caption("Sistem Informasi Deteksi Pelanggaran Lalu Lintas v1.0")
 
 # ----------------------------------------------------------------------
 # HALAMAN 1: HOME
 # ----------------------------------------------------------------------
-if st.session_state.halaman_aktif == 'Home':
-    st.title("🏠 Halaman Utama (Home)")
-    st.markdown("Selamat datang di **Sistem Inteligensia Pemantau Ketertiban Lalu Lintas**. Silakan pilih menu operasional di bawah ini:")
-    st.markdown("---")
+if menu_utama == '🏠 Home':
+    st.markdown("<h1>🏠 Halaman Utama (Home)</h1>", unsafe_allow_html=True)
+    st.write("Selamat datang di **Sistem Inteligensia Pemantau Ketertiban Lalu Lintas**. Halaman ini merupakan pusat navigasi utama dari sistem deteksi pelanggaran helm pengendara sepeda motor.")
     
+    st.write("<br>", unsafe_allow_html=True)
     total_pelanggaran = len(glob.glob(f"{folder_simpan}/*.jpg"))
     
     col1, col2 = st.columns(2)
     with col1:
-        st.info("### 📸 Deteksi Real-Time\nLakukan pendeteksian langsung melalui web browser tanpa kendala jaringan (WebRTC).")
-        if st.button("Buka Menu Deteksi Real-Time ➔", use_container_width=True):
-            pindah_halaman('Deteksi Real-Time')
-            st.rerun()
+        st.markdown(f"""
+        <div class="card-realtime">
+            <h3>📸 Sensor Real-Time</h3>
+            <p>Siap memproses data streaming langsung dari kamera video lokal maupun online.</p>
+        </div>
+        """, unsafe_allow_html=True)
             
     with col2:
-        st.success("### 📂 Upload Video\nLakukan analisis cerdas menggunakan berkas video rekaman lalu lintas (MP4/AVI).")
-        if st.button("Buka Menu Upload Video ➔", use_container_width=True):
-            pindah_halaman('Upload Video')
-            st.rerun()
-            
-    st.write("") 
-    col3, col4 = st.columns(2)
-    with col3:
-        st.warning(f"### 📊 Bukti Pelanggaran\nLihat dan kelola arsip bukti pelanggaran. (Total terekam: **{total_pelanggaran}** foto)")
-        if st.button("Buka Menu Bukti Pelanggaran ➔", use_container_width=True):
-            pindah_halaman('Bukti Pelanggaran')
-            st.rerun()
-            
-    with col4:
-        st.error("### ℹ️ Tentang Sistem\nInformasi mengenai pengembangan website, tujuan, serta teknologi yang digunakan.")
-        if st.button("Buka Menu Tentang ➔", use_container_width=True):
-            pindah_halaman('Tentang')
-            st.rerun()
+        st.markdown(f"""
+        <div class="card-log">
+            <h3>📦 Log Pelanggaran</h3>
+            <p>Telah mengarsipkan sebanyak <b>{total_pelanggaran}</b> foto bukti pelanggaran hukum.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
-# HALAMAN 2: DETEKSI REAL-TIME (CAMERA INPUT LIVE)
+# HALAMAN 2: DETEKSI REAL-TIME (WEBRTC ONLINE)
 # ----------------------------------------------------------------------
-elif st.session_state.halaman_aktif == 'Deteksi Real-Time':
-    if st.button("⬅️ Kembali ke Home"):
-        pindah_halaman('Home')
-        st.rerun()
-        
-    st.title("📸 Menu Deteksi Real-Time (Cloud)")
-    st.write("Silakan izinkan akses kamera di browser Anda. Kamera akan otomatis mengambil gambar secara beruntun.")
+elif menu_utama == '📸 Deteksi Real-Time':
+    st.markdown("<h1>📸 Menu Deteksi Real-Time (Cloud)</h1>", unsafe_allow_html=True)
+    st.write("Silakan klik tombol **'START'** di bawah ini dan berikan izin pada browser Anda untuk mengakses kamera. Video akan berjalan mulus melalui teknologi WebRTC.")
     
     st.markdown("---")
     
-    # Menjalankan stream menggunakan Camera Input Live
-    image = camera_input_live()
-
-    if image is not None:
-        # Konversi gambar hasil tangkapan web ke format OpenCV (Numpy Array)
-        bytes_data = image.getvalue()
-        frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-
-        # Proses frame tersebut ke dalam otak AI YOLOv7
-        frame_hasil, st.session_state.waktu_jepret, _ = proses_deteksi_frame(frame, st.session_state.waktu_jepret)
-
-        # Tampilkan hasilnya (yang sudah digambari kotak Bounding Box) ke layar
-        frame_rgb = cv2.cvtColor(frame_hasil, cv2.COLOR_BGR2RGB)
-        st.image(frame_rgb, channels="RGB", use_container_width=True)
+    # Menjalankan stream WebRTC (async_processing=True adalah kunci Anti-Lag)
+    webrtc_streamer(
+        key="deteksi-realtime",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=RTC_CONFIGURATION,
+        video_processor_factory=YoloVideoProcessor,
+        media_stream_constraints={"video": {"width": 640, "height": 480}, "audio": False},
+        async_processing=True 
+    )
     
     st.markdown("---")
-    st.caption("Catatan: Mode ini mengambil gambar secara dinamis tanpa terhalang firewall jaringan kantor/kampus.")
+    st.caption("Mode WebRTC P2P diaktifkan. Algoritma Async Dropper memastikan aliran video dari kamera tetap lancar tanpa terhalang proses komputasi AI di backend.")
 
 # ----------------------------------------------------------------------
 # HALAMAN 3: UPLOAD VIDEO
 # ----------------------------------------------------------------------
-elif st.session_state.halaman_aktif == 'Upload Video':
-    if st.button("⬅️ Kembali ke Home"):
-        pindah_halaman('Home')
-        st.rerun()
-        
-    st.title("📂 Menu Upload Video")
+elif menu_utama == '📂 Upload Video':
+    st.markdown("<h1>📂 Menu Upload Video</h1>", unsafe_allow_html=True)
     st.write("Gunakan menu ini untuk mendeteksi pelanggaran helm melalui berkas video rekaman lalu lintas.")
     
     if 'video_key' not in st.session_state:
         st.session_state.video_key = 0
         
-    file_video = st.file_uploader("Unggah File Video:", type=["mp4", "avi", "mov"], key=f"uploader_{st.session_state.video_key}")
+    st.write("Unggah File Video:")
+    file_video = st.file_uploader("", type=["mp4", "avi", "mov"], key=f"uploader_{st.session_state.video_key}", label_visibility="collapsed")
     
     col_v1, col_v2, _ = st.columns([1, 1, 4])
     
@@ -235,23 +262,20 @@ elif st.session_state.halaman_aktif == 'Upload Video':
 # ----------------------------------------------------------------------
 # HALAMAN 4: BUKTI PELANGGARAN
 # ----------------------------------------------------------------------
-elif st.session_state.halaman_aktif == 'Bukti Pelanggaran':
-    if st.button("⬅️ Kembali ke Home"):
-        pindah_halaman('Home')
-        st.rerun()
-        
-    st.title("📊 Menu Bukti Pelanggaran")
+elif menu_utama == '📊 Bukti Pelanggaran':
+    st.markdown("<h1>📊 Menu Bukti Pelanggaran</h1>", unsafe_allow_html=True)
     st.write("Halaman ini menampilkan dokumentasi bukti pelanggaran yang ditangkap otomatis oleh sistem.")
     
     daftar_foto = glob.glob(f"{folder_simpan}/*.jpg")
     daftar_foto.sort(key=os.path.getmtime, reverse=True)
     
-    st.subheader("🗑️ Fitur: Hapus Bukti Pelanggaran")
+    st.subheader("🗑️ Hapus Bukti Pelanggaran")
     if daftar_foto:
         nama_file_saja = [os.path.basename(f) for f in daftar_foto]
         pilihan_hapus = st.multiselect(
             "Pilih satu atau beberapa gambar yang ingin dihapus:", 
-            options=nama_file_saja
+            options=nama_file_saja,
+            label_visibility="collapsed"
         )
         if st.button("🚨 Hapus Gambar Terpilih", use_container_width=True):
             if pilihan_hapus:
@@ -269,7 +293,7 @@ elif st.session_state.halaman_aktif == 'Bukti Pelanggaran':
 
     st.markdown("---")
     
-    st.subheader("📁 Fitur: Lihat Bukti Pelanggaran")
+    st.subheader("📁 Lihat Bukti Pelanggaran")
     if not daftar_foto:
         st.info("Belum ada data tangkapan layar pelanggaran yang tersimpan.")
     else:
@@ -283,19 +307,14 @@ elif st.session_state.halaman_aktif == 'Bukti Pelanggaran':
 # ----------------------------------------------------------------------
 # HALAMAN 5: TENTANG
 # ----------------------------------------------------------------------
-elif st.session_state.halaman_aktif == 'Tentang':
-    if st.button("⬅️ Kembali ke Home"):
-        pindah_halaman('Home')
-        st.rerun()
-        
-    st.title("ℹ️ Tentang Sistem")
+elif menu_utama == 'ℹ️ Tentang':
+    st.markdown("<h1>ℹ️ Tentang Sistem</h1>", unsafe_allow_html=True)
     st.markdown("""
-    ### 🔬 Tujuan Pengembangan
-    Aplikasi web ini dibangun sebagai bagian dari penelitian sistem pakar untuk mendeteksi pelanggaran penggunaan helm pada pengendara sepeda motor secara *real-time*. Tujuannya adalah membantu mengotomatisasi sistem peringatan dini di jalan raya guna meningkatkan kepatuhan lalu lintas.
+    Website ini merupakan sistem deteksi pelanggaran penggunaan helm pada pengendara sepeda motor secara real-time yang dikembangkan sebagai implementasi algoritma YOLOv7 berbasis Convolutional Neural Network (CNN). Sistem ini dirancang untuk membantu proses pemantauan penggunaan helm secara otomatis melalui kamera maupun video yang diunggah oleh pengguna.
     
-    ### 🛠️ Teknologi (Tech-Stack)
-    * **Model AI:** YOLOv7 (You Only Look Once Version 7)
-    * **Pemrograman:** Python 3.10+
-    * **Komputasi Visual:** OpenCV, PyTorch, & Streamlit Camera Input
-    * **Web Framework:** Streamlit
+    Sistem mampu mendeteksi objek pengendara yang menggunakan helm (Helmet) dan tidak menggunakan helm (No-Helmet) secara cepat dan akurat. Apabila terdeteksi pengendara yang tidak menggunakan helm, sistem akan menampilkan hasil deteksi berupa bounding box, label kelas, confidence score, serta menyimpan bukti pelanggaran secara otomatis.
+    
+    Website ini menyediakan beberapa fitur, yaitu Deteksi Real-Time, Upload Video, Bukti Pelanggaran, dan Tentang. Melalui fitur-fitur tersebut, pengguna dapat melakukan proses deteksi, melihat hasil deteksi, serta mengakses informasi mengenai sistem yang dikembangkan.
+    
+    Sistem ini dibangun menggunakan Python, Flask, YOLOv7, OpenCV, dan Roboflow sebagai pendukung proses pengolahan data, pelatihan model, serta implementasi website.
     """)
