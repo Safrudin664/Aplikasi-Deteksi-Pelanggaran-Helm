@@ -9,9 +9,7 @@ import numpy as np
 import time
 import tempfile
 import glob
-import av
-from twilio.rest import Client
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode, RTCConfiguration
+from camera_input_live import camera_input_live
 
 from models.experimental import attempt_load
 from utils.general import non_max_suppression, scale_coords
@@ -38,7 +36,7 @@ if not os.path.exists(folder_simpan):
     os.makedirs(folder_simpan)
 
 # ----------------------------------------------------------------------
-# 2. INISIALISASI SESSION STATE & TWILIO TURN SERVER
+# 2. INISIALISASI SESSION STATE
 # ----------------------------------------------------------------------
 if 'halaman_aktif' not in st.session_state:
     st.session_state.halaman_aktif = 'Home'
@@ -47,27 +45,6 @@ if 'waktu_jepret' not in st.session_state:
 
 def pindah_halaman(nama_halaman):
     st.session_state.halaman_aktif = nama_halaman
-
-# --- KONFIGURASI TWILIO (TANPA CACHE AGAR TIDAK NYANGKUT) ---
-TWILIO_ACCOUNT_SID = "AC0d854a7b87db93f735d506b9e7f7a900"
-TWILIO_AUTH_TOKEN = "aa8a2f0a7dba5264bf0530b2c284f1ab"
-
-def get_ice_servers():
-    try:
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        token = client.tokens.create()
-        # Jika sukses, akan muncul notifikasi hijau
-        st.success("✅ Terhubung ke Server Twilio (Jalur VIP WebRTC Aktif!)")
-        return token.ice_servers
-    except Exception as e:
-        # Jika gagal, akan mencetak ALASAN ASLI dari Twilio ke layar
-        st.error(f"❌ KONEKSI TWILIO DITOLAK. ALASAN: {e}")
-        st.warning("⚠️ Menggunakan jalur cadangan Google STUN (Beresiko error di Cloud).")
-        return [{"urls": ["stun:stun.l.google.com:19302"]}]
-
-RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": get_ice_servers()}
-)
 
 # ----------------------------------------------------------------------
 # 3. PEMUATAN MODEL YOLOV7
@@ -136,16 +113,6 @@ def proses_deteksi_frame(img0, last_capture_time):
                 
     return img0, last_capture_time, jumlah_no_helm
 
-# --- KELAS PROSESOR WEBRTC ---
-class YoloVideoProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.waktu_jepret = 0
-
-    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        img = frame.to_ndarray(format="bgr24")
-        img_hasil, self.waktu_jepret, _ = proses_deteksi_frame(img, self.waktu_jepret)
-        return av.VideoFrame.from_ndarray(img_hasil, format="bgr24")
-
 
 # ======================================================================
 # PENGATURAN ROUTING HALAMAN (TAMPILAN UI)
@@ -163,7 +130,7 @@ if st.session_state.halaman_aktif == 'Home':
     
     col1, col2 = st.columns(2)
     with col1:
-        st.info("### 📸 Deteksi Real-Time\nLakukan pendeteksian langsung melalui web browser menggunakan integrasi WebRTC.")
+        st.info("### 📸 Deteksi Real-Time\nLakukan pendeteksian langsung melalui web browser tanpa kendala jaringan (WebRTC).")
         if st.button("Buka Menu Deteksi Real-Time ➔", use_container_width=True):
             pindah_halaman('Deteksi Real-Time')
             st.rerun()
@@ -189,7 +156,7 @@ if st.session_state.halaman_aktif == 'Home':
             st.rerun()
 
 # ----------------------------------------------------------------------
-# HALAMAN 2: DETEKSI REAL-TIME (DENGAN WEBRTC CLOUD)
+# HALAMAN 2: DETEKSI REAL-TIME (CAMERA INPUT LIVE)
 # ----------------------------------------------------------------------
 elif st.session_state.halaman_aktif == 'Deteksi Real-Time':
     if st.button("⬅️ Kembali ke Home"):
@@ -197,22 +164,27 @@ elif st.session_state.halaman_aktif == 'Deteksi Real-Time':
         st.rerun()
         
     st.title("📸 Menu Deteksi Real-Time (Cloud)")
-    st.write("Silakan klik tombol **'START'** di bawah ini dan berikan izin pada browser Anda untuk mengakses kamera.")
+    st.write("Silakan izinkan akses kamera di browser Anda. Kamera akan otomatis mengambil gambar secara beruntun.")
     
     st.markdown("---")
     
-    # Menjalankan stream WebRTC
-    webrtc_streamer(
-        key="deteksi-realtime",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=RTC_CONFIGURATION,
-        video_processor_factory=YoloVideoProcessor,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True
-    )
+    # Menjalankan stream menggunakan Camera Input Live
+    image = camera_input_live()
+
+    if image is not None:
+        # Konversi gambar hasil tangkapan web ke format OpenCV (Numpy Array)
+        bytes_data = image.getvalue()
+        frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+
+        # Proses frame tersebut ke dalam otak AI YOLOv7
+        frame_hasil, st.session_state.waktu_jepret, _ = proses_deteksi_frame(frame, st.session_state.waktu_jepret)
+
+        # Tampilkan hasilnya (yang sudah digambari kotak Bounding Box) ke layar
+        frame_rgb = cv2.cvtColor(frame_hasil, cv2.COLOR_BGR2RGB)
+        st.image(frame_rgb, channels="RGB", use_container_width=True)
     
     st.markdown("---")
-    st.caption("Catatan: Kecepatan deteksi (FPS) pada mode real-time ini sangat bergantung pada kecepatan koneksi internet Anda menuju server Streamlit Cloud.")
+    st.caption("Catatan: Mode ini mengambil gambar secara dinamis tanpa terhalang firewall jaringan kantor/kampus.")
 
 # ----------------------------------------------------------------------
 # HALAMAN 3: UPLOAD VIDEO
@@ -324,6 +296,6 @@ elif st.session_state.halaman_aktif == 'Tentang':
     ### 🛠️ Teknologi (Tech-Stack)
     * **Model AI:** YOLOv7 (You Only Look Once Version 7)
     * **Pemrograman:** Python 3.10+
-    * **Komputasi Visual:** OpenCV, PyTorch, & WebRTC
+    * **Komputasi Visual:** OpenCV, PyTorch, & Streamlit Camera Input
     * **Web Framework:** Streamlit
     """)
