@@ -42,6 +42,8 @@ if 'halaman_aktif' not in st.session_state:
     st.session_state.halaman_aktif = 'Home'
 if 'waktu_jepret' not in st.session_state:
     st.session_state.waktu_jepret = 0
+if 'kamera_aktif' not in st.session_state:
+    st.session_state.kamera_aktif = False
 
 def pindah_halaman(nama_halaman):
     st.session_state.halaman_aktif = nama_halaman
@@ -68,6 +70,7 @@ except Exception as e:
 # 4. FUNGSI LOGIKA INTI DETEKSI
 # ----------------------------------------------------------------------
 def proses_deteksi_frame(img0, last_capture_time):
+    # Menggunakan resolusi 320 agar proses di cloud (CPU) lebih lancar
     img = letterbox(img0, 320, stride=stride)[0]
     img = img[:, :, ::-1].transpose(2, 0, 1)  
     img = np.ascontiguousarray(img)
@@ -164,24 +167,41 @@ elif st.session_state.halaman_aktif == 'Deteksi Real-Time':
         st.rerun()
         
     st.title("📸 Menu Deteksi Real-Time (Cloud)")
-    st.write("Silakan izinkan akses kamera di browser Anda. Kamera akan otomatis mengambil gambar secara beruntun.")
+    st.write("Gunakan menu ini untuk mendeteksi pelanggaran secara langsung melalui sensor kamera.")
     
+    # --- FITUR TOMBOL BUKA/TUTUP KAMERA SESUAI PERMINTAAN ---
+    col_btn1, col_btn2, _ = st.columns([1, 1, 4])
+    with col_btn1:
+        if st.button("🟢 Buka Kamera", use_container_width=True):
+            st.session_state.kamera_aktif = True
+            st.rerun()
+    with col_btn2:
+        if st.button("🔴 Tutup Kamera", use_container_width=True):
+            st.session_state.kamera_aktif = False
+            st.rerun()
+            
     st.markdown("---")
     
-    # Menjalankan stream menggunakan Camera Input Live
-    image = camera_input_live()
+    # Logika untuk menampilkan frame hanya ketika tombol "Buka Kamera" ditekan
+    if st.session_state.kamera_aktif:
+        st.success("Status Kamera: **AKTIF**. (Silakan klik 'Start capturing' pada layar hitam di bawah untuk memulai streaming)")
+        
+        # Menjalankan stream menggunakan Camera Input Live
+        image = camera_input_live()
 
-    if image is not None:
-        # Konversi gambar hasil tangkapan web ke format OpenCV (Numpy Array)
-        bytes_data = image.getvalue()
-        frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+        if image is not None:
+            # Konversi gambar hasil tangkapan web ke format OpenCV (Numpy Array)
+            bytes_data = image.getvalue()
+            frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
 
-        # Proses frame tersebut ke dalam otak AI YOLOv7
-        frame_hasil, st.session_state.waktu_jepret, _ = proses_deteksi_frame(frame, st.session_state.waktu_jepret)
+            # Proses frame tersebut ke dalam otak AI YOLOv7
+            frame_hasil, st.session_state.waktu_jepret, _ = proses_deteksi_frame(frame, st.session_state.waktu_jepret)
 
-        # Tampilkan hasilnya (yang sudah digambari kotak Bounding Box) ke layar
-        frame_rgb = cv2.cvtColor(frame_hasil, cv2.COLOR_BGR2RGB)
-        st.image(frame_rgb, channels="RGB", use_container_width=True)
+            # Tampilkan hasilnya (yang sudah digambari kotak Bounding Box) ke layar
+            frame_rgb = cv2.cvtColor(frame_hasil, cv2.COLOR_BGR2RGB)
+            st.image(frame_rgb, channels="RGB", use_container_width=True)
+    else:
+        st.info("Status Kamera: **NON-AKTIF**. Silakan klik tombol 'Buka Kamera' di atas untuk menyalakan sensor.")
     
     st.markdown("---")
     st.caption("Catatan: Mode ini mengambil gambar secara dinamis tanpa terhalang firewall jaringan kantor/kampus.")
