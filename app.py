@@ -10,7 +10,7 @@ import time
 import tempfile
 import glob
 import av
-from twilio.rest import Client  # <--- TAMBAHAN BARU
+from twilio.rest import Client
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode, RTCConfiguration
 
 from models.experimental import attempt_load
@@ -37,20 +37,8 @@ folder_simpan = 'no-helm'
 if not os.path.exists(folder_simpan):
     os.makedirs(folder_simpan)
 
-# Pengaturan Server STUN/TURN Publik Google (Agar streaming jalan mulus di internet)
-# Pengaturan Multi-STUN Server (Mencegah koneksi terputus di Cloud)
-RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]},
-        {"urls": ["stun:stun3.l.google.com:19302"]},
-        {"urls": ["stun:stun4.l.google.com:19302"]},
-    ]}
-)
-
 # ----------------------------------------------------------------------
-# 2. INISIALISASI SESSION STATE
+# 2. INISIALISASI SESSION STATE & TWILIO TURN SERVER
 # ----------------------------------------------------------------------
 if 'halaman_aktif' not in st.session_state:
     st.session_state.halaman_aktif = 'Home'
@@ -59,6 +47,27 @@ if 'waktu_jepret' not in st.session_state:
 
 def pindah_halaman(nama_halaman):
     st.session_state.halaman_aktif = nama_halaman
+
+# --- KONFIGURASI TWILIO (TANPA CACHE AGAR TIDAK NYANGKUT) ---
+TWILIO_ACCOUNT_SID = "AC0d854a7b87db93f735d506b9e7f7a900"
+TWILIO_AUTH_TOKEN = "aa8a2f0a7dba5264bf0530b2c284f1ab"
+
+def get_ice_servers():
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        token = client.tokens.create()
+        # Jika sukses, akan muncul notifikasi hijau
+        st.success("✅ Terhubung ke Server Twilio (Jalur VIP WebRTC Aktif!)")
+        return token.ice_servers
+    except Exception as e:
+        # Jika gagal, akan mencetak ALASAN ASLI dari Twilio ke layar
+        st.error(f"❌ KONEKSI TWILIO DITOLAK. ALASAN: {e}")
+        st.warning("⚠️ Menggunakan jalur cadangan Google STUN (Beresiko error di Cloud).")
+        return [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": get_ice_servers()}
+)
 
 # ----------------------------------------------------------------------
 # 3. PEMUATAN MODEL YOLOV7
@@ -128,7 +137,6 @@ def proses_deteksi_frame(img0, last_capture_time):
     return img0, last_capture_time, jumlah_no_helm
 
 # --- KELAS PROSESOR WEBRTC ---
-# Ini adalah jembatan antara frame video dari browser internet ke fungsi YOLOv7 kita
 class YoloVideoProcessor(VideoProcessorBase):
     def __init__(self):
         self.waktu_jepret = 0
@@ -137,25 +145,6 @@ class YoloVideoProcessor(VideoProcessorBase):
         img = frame.to_ndarray(format="bgr24")
         img_hasil, self.waktu_jepret, _ = proses_deteksi_frame(img, self.waktu_jepret)
         return av.VideoFrame.from_ndarray(img_hasil, format="bgr24")
-
-
-
-TWILIO_ACCOUNT_SID = "AC0d854a7b87db93f735d506b9e7f7a900"
-TWILIO_AUTH_TOKEN = "aa8a2f0a7dba5264bf0530b2c284f1ab"
-
-@st.cache_data
-def get_ice_servers():
-    try:
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        token = client.tokens.create()
-        return token.ice_servers
-    except Exception as e:
-        st.warning("Gagal terhubung ke Twilio. Menggunakan jalur cadangan.")
-        return [{"urls": ["stun:stun.l.google.com:19302"]}]
-
-RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": get_ice_servers()}
-)
 
 
 # ======================================================================
