@@ -37,10 +37,29 @@ folder_simpan = 'no-helm'
 if not os.path.exists(folder_simpan):
     os.makedirs(folder_simpan)
 
-# Konfigurasi STUN server publik agar koneksi WebRTC stabil
-# (penting terutama jika app di-deploy ke cloud / diakses dari jaringan berbeda)
+# Konfigurasi ICE server (STUN + TURN) agar koneksi WebRTC tetap bisa
+# terbentuk walau di jaringan/hosting yang membatasi UDP (mis. Streamlit
+# Community Cloud). STUN saja seringkali TIDAK cukup di lingkungan seperti
+# itu, sehingga negosiasi gagal berulang dan memicu error
+# "Transaction.__retry() ... NoneType has no attribute 'sendto'".
+# Ganti kredensial di bawah dengan akun TURN milikmu sendiri untuk produksi
+# (mis. Twilio Network Traversal Service, Metered.ca, atau coturn sendiri).
 RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {
+                "urls": ["turn:global.relay.metered.ca:80"],
+                "username": "GANTI_DENGAN_USERNAME_TURN",
+                "credential": "GANTI_DENGAN_CREDENTIAL_TURN",
+            },
+            {
+                "urls": ["turns:global.relay.metered.ca:443?transport=tcp"],
+                "username": "GANTI_DENGAN_USERNAME_TURN",
+                "credential": "GANTI_DENGAN_CREDENTIAL_TURN",
+            },
+        ]
+    }
 )
 
 # ----------------------------------------------------------------------
