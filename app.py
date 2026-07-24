@@ -102,7 +102,13 @@ except Exception as e:
 # ----------------------------------------------------------------------
 # 4. FUNGSI LOGIKA INTI DETEKSI (dipakai bersama oleh semua halaman)
 # ----------------------------------------------------------------------
-def proses_deteksi_frame(img0, last_capture_time):
+# Dipecah jadi 2 tahap:
+#   1) jalankan_deteksi()  -> tahap MAHAL (inferensi YOLOv7). Hanya perlu
+#      dipanggil sesekali (tidak wajib tiap frame) supaya CPU tidak overload.
+#   2) gambar_hasil_deteksi() -> tahap MURAH (cuma cv2.rectangle/putText).
+#      Aman dipanggil tiap frame, dipakai untuk "menghias ulang" frame baru
+#      dengan hasil deteksi terakhir saat sedang skip inferensi.
+def jalankan_deteksi(img0, last_capture_time):
     # Menggunakan resolusi 320 agar proses di cloud (CPU) lebih lancar
     img = letterbox(img0, 320, stride=stride)[0]
     img = img[:, :, ::-1].transpose(2, 0, 1)
@@ -115,6 +121,7 @@ def proses_deteksi_frame(img0, last_capture_time):
         pred = model(img_tensor, augment=False)[0]
     pred = non_max_suppression(pred, conf_thres=0.4, iou_thres=0.45)
 
+    daftar_deteksi = []  # list of (x1, y1, x2, y2, label_text, color, is_no_helm)
     jumlah_no_helm = 0
     for i, det in enumerate(pred):
         if len(det):
@@ -122,6 +129,7 @@ def proses_deteksi_frame(img0, last_capture_time):
             for *xyxy, conf, cls in reversed(det):
                 label_name = names[int(cls)]
                 confidence = float(conf)
+                is_no_helm = False
 
                 if label_name.lower() == "helm":
                     color = (0, 255, 0)
@@ -130,6 +138,7 @@ def proses_deteksi_frame(img0, last_capture_time):
                     color = (0, 0, 255)
                     label_text = f"No-Helm {confidence:.2f}"
                     jumlah_no_helm += 1
+                    is_no_helm = True
 
                     current_time = time.time()
                     if current_time - last_capture_time > 2.0:
@@ -142,11 +151,24 @@ def proses_deteksi_frame(img0, last_capture_time):
                     label_text = f"{label_name} {confidence:.2f}"
 
                 x1, y1, x2, y2 = map(int, xyxy)
-                cv2.rectangle(img0, (x1, y1), (x2, y2), color, 3)
-                t_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-                cv2.rectangle(img0, (x1, y1 - t_size[1] - 3), (x1 + t_size[0], y1 + 3), color, -1)
-                cv2.putText(img0, label_text, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+                daftar_deteksi.append((x1, y1, x2, y2, label_text, color, is_no_helm))
 
+    return daftar_deteksi, last_capture_time, jumlah_no_helm
+
+
+def gambar_hasil_deteksi(img0, daftar_deteksi):
+    for x1, y1, x2, y2, label_text, color, _ in daftar_deteksi:
+        cv2.rectangle(img0, (x1, y1), (x2, y2), color, 3)
+        t_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        cv2.rectangle(img0, (x1, y1 - t_size[1] - 3), (x1 + t_size[0], y1 + 3), color, -1)
+        cv2.putText(img0, label_text, (x1, y1 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+    return img0
+
+
+def proses_deteksi_frame(img0, last_capture_time):
+    """Dipakai oleh halaman Upload Video: deteksi + gambar sekaligus, tiap frame."""
+    daftar_deteksi, last_capture_time, jumlah_no_helm = jalankan_deteksi(img0, last_capture_time)
+    img0 = gambar_hasil_deteksi(img0, daftar_deteksi)
     return img0, last_capture_time, jumlah_no_helm
 
 
@@ -156,24 +178,40 @@ def proses_deteksi_frame(img0, last_capture_time):
 # recv() dijalankan di thread terpisah oleh streamlit-webrtc untuk setiap
 # frame yang masuk dari kamera, sehingga streaming jauh lebih mulus
 # dibanding pendekatan rerun-per-frame seperti camera_input_live.
+#
+# ANTI-LAG: inferensi YOLOv7 di CPU jauh lebih lambat dari kecepatan kamera
+# mengirim frame, sehingga kalau dijalankan di SETIAP frame, frame akan
+# menumpuk (backpressure) dan video terasa patah-patah. Solusinya: jalankan
+# inferensi hanya tiap PROSES_TIAP_N_FRAME frame, dan di frame-frame lain
+# cukup gambar ulang kotak deteksi terakhir (murah, tidak butuh inferensi)
+# supaya frame rate video tetap tinggi dan mulus.
+PROSES_TIAP_N_FRAME = 3  # naikkan angka ini jika masih lag, turunkan jika ingin kotak lebih responsif
+
 class HelmDetectionProcessor(VideoProcessorBase):
     def __init__(self):
         self.last_capture_time = 0
         self.jumlah_no_helm_terakhir = 0
+        self.frame_counter = 0
+        self.daftar_deteksi_terakhir = []
         self.lock = threading.Lock()
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img0 = frame.to_ndarray(format="bgr24")
 
         with self.lock:
+            self.frame_counter += 1
+            jalankan_inferensi = (self.frame_counter % PROSES_TIAP_N_FRAME == 0)
             last_capture_time = self.last_capture_time
+            daftar_deteksi = self.daftar_deteksi_terakhir
 
-        img_hasil, last_capture_time, jumlah_no_helm = proses_deteksi_frame(img0, last_capture_time)
+        if jalankan_inferensi:
+            daftar_deteksi, last_capture_time, jumlah_no_helm = jalankan_deteksi(img0, last_capture_time)
+            with self.lock:
+                self.last_capture_time = last_capture_time
+                self.daftar_deteksi_terakhir = daftar_deteksi
+                self.jumlah_no_helm_terakhir = jumlah_no_helm
 
-        with self.lock:
-            self.last_capture_time = last_capture_time
-            self.jumlah_no_helm_terakhir = jumlah_no_helm
-
+        img_hasil = gambar_hasil_deteksi(img0, daftar_deteksi)
         return av.VideoFrame.from_ndarray(img_hasil, format="bgr24")
 
 
