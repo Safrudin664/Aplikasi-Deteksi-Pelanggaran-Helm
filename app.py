@@ -37,44 +37,40 @@ folder_simpan = 'no-helm'
 if not os.path.exists(folder_simpan):
     os.makedirs(folder_simpan)
 
-# Konfigurasi ICE server (STUN + TURN) agar koneksi WebRTC tetap bisa
-# terbentuk walau di jaringan/hosting yang membatasi UDP (mis. Streamlit
-# Community Cloud). STUN saja seringkali TIDAK cukup di lingkungan seperti
-# itu, sehingga negosiasi macet di "Connecting..." / "Connection is taking
-# longer than expected" dan akhirnya memicu error Transaction.__retry().
+# Konfigurasi ICE server (STUN + TURN).
 #
-# Di bawah ini memakai TURN publik gratis dari Open Relay Project (Metered)
-# untuk testing (kuota ±20GB/bulan, dibagi ke semua pengguna publik).
-# UNTUK PRODUKSI: buat akun sendiri (gratis) di https://www.metered.ca/tools/openrelay/
-# atau pakai Twilio Network Traversal Service / coturn sendiri, supaya kuota
-# tidak dipakai bersama orang lain dan lebih stabil.
-RTC_CONFIGURATION = RTCConfiguration(
-    {
-        "iceServers": [
-            {"urls": ["stun:stun.relay.metered.ca:80"]},
-            {
-                "urls": ["turn:global.relay.metered.ca:80"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
-            },
-            {
-                "urls": ["turn:global.relay.metered.ca:80?transport=tcp"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
-            },
-            {
-                "urls": ["turn:global.relay.metered.ca:443"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
-            },
-            {
-                "urls": ["turns:global.relay.metered.ca:443?transport=tcp"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject",
-            },
-        ]
-    }
-)
+# Streamlit Community Cloud diketahui sering memblokir paket WebRTC secara
+# langsung, sehingga TURN server WAJIB dipakai (bukan cuma STUN), dan harus
+# yang stabil. Open Relay Project (gratis) sering down, jadi di sini kita
+# pakai Twilio Network Traversal Service — ini rekomendasi resmi dari
+# pembuat streamlit-webrtc, dan dipakai juga di demo resminya di Community
+# Cloud. Daftar gratis (ada trial credit) di https://www.twilio.com/try-twilio
+#
+# Simpan TWILIO_ACCOUNT_SID & TWILIO_AUTH_TOKEN di Streamlit Secrets
+# (menu Settings > Secrets di dashboard Community Cloud), JANGAN ditulis
+# langsung di kode.
+@st.cache_data(ttl=3000)  # token Twilio berlaku ~1 jam, cache 50 menit
+def get_ice_servers():
+    try:
+        from twilio.rest import Client
+
+        account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
+        auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
+        client = Client(account_sid, auth_token)
+        token = client.tokens.create()
+        return token.ice_servers
+    except Exception as e:
+        # Fallback ke STUN publik saja jika Twilio belum dikonfigurasi
+        # (deteksi realtime mungkin tidak akan berfungsi di Community Cloud
+        # tanpa TURN yang stabil, tapi ini mencegah aplikasi crash total)
+        st.warning(
+            "TURN server (Twilio) belum dikonfigurasi dengan benar, "
+            "menggunakan STUN saja. Deteksi realtime mungkin gagal connect "
+            "di Streamlit Community Cloud. Cek Settings > Secrets."
+        )
+        return [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+RTC_CONFIGURATION = RTCConfiguration({"iceServers": get_ice_servers()})
 
 # ----------------------------------------------------------------------
 # 2. INISIALISASI SESSION STATE
